@@ -1,33 +1,20 @@
 """Step 5 — Export the book as a professionally typeset PDF.
 
-Cover page, dot-leader table of contents with real page numbers, chapter
-title pages, justified serif body text, running header/footer, PDF
-bookmarks. Uses ReportLab (Platypus + multiBuild for the TOC pass).
+Generates a Typst (.typ) document and compiles it with the `typst` CLI.
+Typst gives real hyphenation, kerning/ligatures, a native table of
+contents with dot leaders and correct page numbers, automatic PDF
+bookmarks, and (via the `droplet` package) genuine multi-line drop caps
+— all things ReportLab's layout engine can't do well. Install once with
+`brew install typst` (or see https://typst.app).
 """
 import json
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from dotenv import load_dotenv
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
-from reportlab.lib.pagesizes import inch
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.pdfmetrics import registerFontFamily
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (
-    BaseDocTemplate,
-    Frame,
-    HRFlowable,
-    NextPageTemplate,
-    PageBreak,
-    PageTemplate,
-    Paragraph,
-    Spacer,
-)
-from reportlab.platypus.tableofcontents import TableOfContents
 
 load_dotenv()
 
@@ -35,6 +22,7 @@ BASE = Path(__file__).parent
 VIDEOS_PATH = BASE / "data" / "videos.json"
 CHAPTERS_DIR = BASE / "data" / "chapters"
 OUT_PATH = BASE / "output" / "book.pdf"
+TYP_PATH = BASE / "output" / "_book.typ"
 
 BOOK_TITLE = os.getenv("BOOK_TITLE", "Parenting with Dr. Debmita Dutta")
 BOOK_SUBTITLE = os.getenv(
@@ -42,140 +30,33 @@ BOOK_SUBTITLE = os.getenv(
 )
 BOOK_BYLINE = os.getenv("BOOK_BYLINE", "Compiled from the YouTube channel of Dr. Debmita Dutta")
 
-PAGE_SIZE = (6 * inch, 9 * inch)
-MARGIN = 0.75 * inch
+FONT = os.getenv("PDF_FONT", "Georgia")
+ACCENT = os.getenv("PDF_ACCENT", "#B5533C")
+ACCENT_DARK = os.getenv("PDF_ACCENT_DARK", "#7A3229")
 
-# --- Fonts -------------------------------------------------------------
-FONT_DIR = Path("/System/Library/Fonts/Supplemental")
-FONT_FILES = {
-    "Georgia": "Georgia.ttf",
-    "Georgia-Bold": "Georgia Bold.ttf",
-    "Georgia-Italic": "Georgia Italic.ttf",
-    "Georgia-BoldItalic": "Georgia Bold Italic.ttf",
-}
+# --- Typst markup helpers --------------------------------------------------
+TYPST_SPECIAL = re.compile(r"([\\#$_*\[\]<>@`~=+\/-])")
 
 
-def register_fonts():
-    if all((FONT_DIR / f).exists() for f in FONT_FILES.values()):
-        for name, filename in FONT_FILES.items():
-            pdfmetrics.registerFont(TTFont(name, str(FONT_DIR / filename)))
-        registerFontFamily(
-            "Georgia",
-            normal="Georgia",
-            bold="Georgia-Bold",
-            italic="Georgia-Italic",
-            boldItalic="Georgia-BoldItalic",
-        )
-        return "Georgia", "Georgia-Bold", "Georgia-Italic", "Georgia-BoldItalic"
-    # Fallback for machines without the macOS Supplemental fonts installed
-    return "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"
+def typst_escape(text: str) -> str:
+    return TYPST_SPECIAL.sub(r"\\\1", text)
 
 
-FONT, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC = register_fonts()
-
-# --- Color palette ---------------------------------------------------------
-# Override via .env if you want a different accent (e.g. PDF_ACCENT=#1B5E56)
-ACCENT_HEX = os.getenv("PDF_ACCENT", "#B5533C")  # terracotta — chapter numerals, subheads, rules
-ACCENT_DARK_HEX = os.getenv("PDF_ACCENT_DARK", "#7A3229")  # cover title, chapter titles
-ACCENT = colors.HexColor(ACCENT_HEX)
-ACCENT_DARK = colors.HexColor(ACCENT_DARK_HEX)
-TEXT = colors.HexColor("#1A1A1A")
-MUTED = colors.HexColor("#7A7A7A")
-MUTED_LIGHT = colors.HexColor("#A8A8A8")
-
-# --- Styles --------------------------------------------------------------
-COVER_TITLE = ParagraphStyle(
-    "CoverTitle",
-    fontName=FONT_BOLD,
-    fontSize=32,
-    leading=38,
-    alignment=TA_CENTER,
-    textColor=ACCENT_DARK,
-    spaceAfter=16,
-)
-COVER_SUBTITLE = ParagraphStyle(
-    "CoverSubtitle",
-    fontName=FONT_ITALIC,
-    fontSize=15,
-    leading=20,
-    alignment=TA_CENTER,
-    textColor=MUTED,
-    spaceAfter=28,
-)
-COVER_BYLINE = ParagraphStyle(
-    "CoverByline", fontName=FONT, fontSize=11, alignment=TA_CENTER, textColor=MUTED_LIGHT
-)
-TOC_HEADING = ParagraphStyle(
-    "TOCHeading",
-    fontName=FONT_BOLD,
-    fontSize=22,
-    alignment=TA_CENTER,
-    textColor=ACCENT_DARK,
-    spaceAfter=6,
-)
-CHAPTER_NUM = ParagraphStyle(
-    "ChapterNum",
-    fontName=FONT_BOLD,
-    fontSize=13,
-    alignment=TA_CENTER,
-    textColor=ACCENT,
-    spaceAfter=8,
-)
-CHAPTER_TITLE = ParagraphStyle(
-    "ChapterTitleTOC",
-    fontName=FONT_BOLD,
-    fontSize=24,
-    leading=29,
-    alignment=TA_CENTER,
-    textColor=ACCENT_DARK,
-    spaceAfter=14,
-)
-APPENDIX_HEADING = ParagraphStyle(
-    "AppendixHeading", fontName=FONT_BOLD, fontSize=22, alignment=TA_CENTER, textColor=ACCENT_DARK, spaceAfter=6
-)
-BODY = ParagraphStyle(
-    "Body",
-    fontName=FONT,
-    fontSize=11,
-    leading=17,
-    alignment=TA_JUSTIFY,
-    textColor=TEXT,
-    spaceAfter=10,
-    firstLineIndent=18,
-)
-SUBHEAD = ParagraphStyle(
-    "SubHead", fontName=FONT_BOLD, fontSize=13.5, spaceBefore=22, spaceAfter=8, textColor=ACCENT
-)
-APPENDIX_TITLE = ParagraphStyle(
-    "AppendixTitle", fontName=FONT_BOLD, fontSize=11, textColor=TEXT, spaceBefore=8, spaceAfter=2
-)
-APPENDIX_URL = ParagraphStyle("AppendixURL", fontName=FONT_ITALIC, fontSize=10, textColor=MUTED, spaceAfter=4)
-
-TOC_ENTRY = ParagraphStyle(
-    "TOCEntry", fontName=FONT, fontSize=12, leading=22, leftIndent=0, textColor=TEXT, dotColor=MUTED_LIGHT
-)
-
-
-def xml_escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def markdown_inline(text: str) -> str:
-    text = xml_escape(text)
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", text)
-    return text
-
-
-def with_drop_cap(text: str) -> str:
-    if not text:
-        return text
-    first, rest = text[0], text[1:]
-    return f'<font face="{FONT_BOLD}" size="30" color="{ACCENT_HEX}">{first}</font>{rest}'
-
-
-def letter_spaced(text: str, sep: str = " ") -> str:
-    return sep.join(text)
+def markdown_to_typst(text: str) -> str:
+    """Convert **bold** / *italic* markdown into Typst's *bold* / _italic_, escaping
+    everything else so stray markup-significant characters render literally."""
+    parts = re.split(r"(\*\*.+?\*\*|\*.+?\*)", text)
+    out = []
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**"):
+            out.append(f"*{typst_escape(part[2:-2])}*")
+        elif part.startswith("*") and part.endswith("*"):
+            out.append(f"_{typst_escape(part[1:-1])}_")
+        else:
+            out.append(typst_escape(part))
+    return "".join(out)
 
 
 def parse_chapter(raw: str) -> tuple[str, str]:
@@ -189,113 +70,153 @@ def parse_chapter(raw: str) -> tuple[str, str]:
     return title, body
 
 
-def body_flowables(body: str) -> list:
-    flowables = []
+def body_to_typst(body: str) -> str:
+    """Render chapter body blocks as Typst markup. The first real paragraph gets a
+    genuine wrap-around drop cap; ##/**bold-line** blocks become level-2 headings."""
+    out = []
     first_paragraph_done = False
     for block in body.split("\n\n"):
         block = block.strip()
         if not block:
             continue
+
         heading_match = re.match(r"^#{2,3}\s+(.*)", block)
-        # Local models tend to emit "**Subheading**" rather than "## Subheading" — treat a
-        # block that's a single bold-wrapped line the same way as a markdown heading.
         bold_heading_match = re.match(r"^\*\*(.+?)\*\*$", block) if not heading_match else None
-        if heading_match:
-            flowables.append(Paragraph(markdown_inline(heading_match.group(1).strip()), SUBHEAD))
-            continue
-        if bold_heading_match:
-            flowables.append(Paragraph(markdown_inline(bold_heading_match.group(1).strip()), SUBHEAD))
+        heading_text = heading_match.group(1).strip() if heading_match else (
+            bold_heading_match.group(1).strip() if bold_heading_match else None
+        )
+
+        if heading_text is not None:
+            out.append(f"== {typst_escape(heading_text)}")
             continue
 
-        converted = markdown_inline(block)
+        converted = markdown_to_typst(block)
         if not first_paragraph_done:
-            converted = with_drop_cap(converted)
+            out.append(f"#dropcap(height: 3, gap: 8pt)[{converted}]")
             first_paragraph_done = True
-        flowables.append(Paragraph(converted, BODY))
-    return flowables
+        else:
+            out.append(converted)
+    return "\n\n".join(out)
 
 
-class BookDocTemplate(BaseDocTemplate):
-    def afterFlowable(self, flowable):
-        if isinstance(flowable, Paragraph) and flowable.style.name == "ChapterTitleTOC":
-            text = flowable.getPlainText()
-            self.notify("TOCEntry", (0, text, self.page))
-            key = "ch-" + re.sub(r"[^a-z0-9]+", "-", text.lower())[:60]
-            self.canv.bookmarkPage(key)
-            self.canv.addOutlineEntry(text, key, level=0, closed=False)
+PREAMBLE = f"""\
+#import "@preview/droplet:0.3.1": dropcap
+
+#let accent = rgb("{ACCENT}")
+#let accent-dark = rgb("{ACCENT_DARK}")
+#let muted = rgb("#7A7A7A")
+#let body-font = "{FONT}"
+
+#set text(font: body-font, size: 11pt, lang: "en", fill: rgb("#1A1A1A"))
+#set par(justify: true, leading: 0.75em, first-line-indent: 1.2em)
+
+#show heading.where(level: 1): it => align(center)[
+  #text(font: body-font, weight: "bold", size: 24pt, fill: accent-dark)[#it.body]
+]
+#show heading.where(level: 2): it => block(above: 22pt, below: 8pt)[
+  #text(font: body-font, weight: "bold", size: 13.5pt, fill: accent)[#it.body]
+]
+
+#let running-header = context {{
+  align(center)[
+    #text(font: body-font, style: "italic", size: 8pt, fill: muted)[{typst_escape(BOOK_TITLE.upper())}]
+    #v(2pt)
+    #line(length: 100%, stroke: 0.6pt + accent)
+  ]
+}}
+#let page-footer = context align(center)[
+  #text(font: body-font, weight: "bold", size: 9pt, fill: accent)[#counter(page).display()]
+]
+
+#set page(
+  width: 6in, height: 9in,
+  margin: (x: 0.75in, y: 0.75in),
+  header: running-header,
+  footer: page-footer,
+)
+
+// --- Cover ---
+#page(header: none, footer: none)[
+  #v(2.2in)
+  #align(center)[
+    #text(font: body-font, weight: "bold", size: 32pt, fill: accent-dark)[{typst_escape(BOOK_TITLE)}]
+    #v(10pt)
+    #line(length: 22%, stroke: 2pt + accent)
+    #v(16pt)
+    #text(font: body-font, style: "italic", size: 15pt, fill: muted)[{typst_escape(BOOK_SUBTITLE)}]
+    #v(24pt)
+    #text(font: body-font, size: 11pt, fill: rgb("#A8A8A8"))[{typst_escape(BOOK_BYLINE)}]
+  ]
+]
+
+// --- Table of contents ---
+#align(center)[
+  #text(font: body-font, weight: "bold", size: 22pt, fill: accent-dark)[Contents]
+  #v(4pt)
+  #line(length: 18%, stroke: 1.4pt + accent)
+]
+#v(22pt)
+#show outline.entry: it => block(below: 12pt)[#it]
+#outline(title: none, target: heading.where(level: 1), indent: auto)
+#pagebreak(weak: true)
+"""
 
 
-def draw_content_furniture(canv, doc):
-    canv.saveState()
-    canv.setFont(FONT_ITALIC, 8)
-    canv.setFillColor(MUTED)
-    canv.drawCentredString(PAGE_SIZE[0] / 2, PAGE_SIZE[1] - 0.5 * inch, BOOK_TITLE.upper())
-    canv.setStrokeColor(ACCENT)
-    canv.setLineWidth(0.7)
-    canv.line(MARGIN, PAGE_SIZE[1] - 0.58 * inch, PAGE_SIZE[0] - MARGIN, PAGE_SIZE[1] - 0.58 * inch)
+def chapter_block(number: int, title: str, body: str) -> str:
+    kicker = f"CHAPTER {number}"
+    return f"""
+#pagebreak(weak: true)
+#align(center)[
+  #text(font: body-font, weight: "bold", size: 13pt, fill: accent, tracking: 0.18em)[{typst_escape(kicker)}]
+]
+#v(6pt)
+= {typst_escape(title)}
+#v(4pt)
+#align(center)[#line(length: 14%, stroke: 1.6pt + accent)]
+#v(18pt)
 
-    canv.setFont(FONT_BOLD, 9)
-    canv.setFillColor(ACCENT)
-    canv.drawCentredString(PAGE_SIZE[0] / 2, 0.45 * inch, str(canv.getPageNumber()))
-    canv.restoreState()
-
-
-def draw_cover_furniture(canv, doc):
-    canv.saveState()
-    canv.setStrokeColor(ACCENT)
-    canv.setLineWidth(2)
-    canv.line(PAGE_SIZE[0] / 2 - 0.9 * inch, PAGE_SIZE[1] - 2.55 * inch, PAGE_SIZE[0] / 2 + 0.9 * inch, PAGE_SIZE[1] - 2.55 * inch)
-    canv.restoreState()
+{body_to_typst(body)}
+"""
 
 
-def build_story(videos: dict, chapter_files: list[Path]) -> list:
-    story = []
+def appendix_block(chapters: list[tuple[str, str, str]], videos: dict) -> str:
+    lines = [
+        '#pagebreak(weak: true)',
+        '#align(center)[',
+        f'  #text(font: body-font, weight: "bold", size: 22pt, fill: accent-dark)[Appendix: Source Videos]',
+        "  #v(4pt)",
+        "  #line(length: 18%, stroke: 1.4pt + accent)",
+        "]",
+        "#v(20pt)",
+    ]
+    for video_id, title, _ in chapters:
+        url = videos.get(video_id, {}).get("url", f"https://www.youtube.com/watch?v={video_id}")
+        lines.append(f'#text(weight: "bold", size: 11pt)[{typst_escape(title)}]')
+        lines.append(f'#v(1pt)')
+        lines.append(f'#text(style: "italic", size: 10pt, fill: muted)[{typst_escape(url)}]')
+        lines.append("#v(8pt)")
+    return "\n".join(lines)
 
-    # --- Cover ---
-    story.append(Spacer(1, 2.2 * inch))
-    story.append(Paragraph(xml_escape(BOOK_TITLE), COVER_TITLE))
-    story.append(Paragraph(xml_escape(BOOK_SUBTITLE), COVER_SUBTITLE))
-    story.append(Paragraph(xml_escape(BOOK_BYLINE), COVER_BYLINE))
 
-    story.append(NextPageTemplate("Content"))
-    story.append(PageBreak())
+def build_typst_source(videos: dict, chapter_files: list[Path]) -> str:
+    parts = [PREAMBLE]
 
-    # --- Table of contents ---
-    story.append(Paragraph("Contents", TOC_HEADING))
-    story.append(HRFlowable(width="18%", thickness=1.4, color=ACCENT, spaceAfter=22, hAlign="CENTER"))
-    toc = TableOfContents()
-    toc.levelStyles = [TOC_ENTRY]
-    toc.dotsMinLevel = 0
-    story.append(toc)
-    story.append(PageBreak())
-
-    # --- Chapters ---
     chapters = []
     for i, path in enumerate(chapter_files, 1):
         video_id = path.stem
         title, body = parse_chapter(path.read_text(encoding="utf-8"))
         chapters.append((video_id, title, body))
+        parts.append(chapter_block(i, title, body))
 
-        story.append(Paragraph(letter_spaced(f"CHAPTER {i}"), CHAPTER_NUM))
-        story.append(Paragraph(xml_escape(title), CHAPTER_TITLE))
-        story.append(HRFlowable(width="14%", thickness=1.6, color=ACCENT, spaceAfter=22, hAlign="CENTER"))
-        story.extend(body_flowables(body))
-        story.append(PageBreak())
-
-    # --- Appendix ---
-    story.append(Paragraph("Appendix: Source Videos", APPENDIX_HEADING))
-    story.append(HRFlowable(width="18%", thickness=1.4, color=ACCENT, spaceAfter=20, hAlign="CENTER"))
-    for video_id, title, _ in chapters:
-        url = videos.get(video_id, {}).get("url", f"https://www.youtube.com/watch?v={video_id}")
-        story.append(Paragraph(xml_escape(title), APPENDIX_TITLE))
-        story.append(Paragraph(xml_escape(url), APPENDIX_URL))
-
-    return story
+    parts.append(appendix_block(chapters, videos))
+    return "\n".join(parts)
 
 
 def main():
     if not VIDEOS_PATH.exists():
         raise SystemExit("data/videos.json not found — run 1_fetch_videos.py first")
+    if not shutil.which("typst"):
+        raise SystemExit("typst CLI not found — install it first: brew install typst")
 
     videos = {v["id"]: v for v in json.loads(VIDEOS_PATH.read_text())}
     chapter_files = sorted(CHAPTERS_DIR.glob("*.txt"))
@@ -308,31 +229,17 @@ def main():
     chapter_files.sort(key=sort_key)
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TYP_PATH.write_text(build_typst_source(videos, chapter_files), encoding="utf-8")
 
-    doc = BookDocTemplate(
-        str(OUT_PATH),
-        pagesize=PAGE_SIZE,
-        leftMargin=MARGIN,
-        rightMargin=MARGIN,
-        topMargin=MARGIN,
-        bottomMargin=MARGIN,
-        title=BOOK_TITLE,
+    result = subprocess.run(
+        ["typst", "compile", str(TYP_PATH), str(OUT_PATH)],
+        capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        raise SystemExit(f"typst compile failed:\n{result.stderr}")
 
-    content_frame = Frame(MARGIN, MARGIN, PAGE_SIZE[0] - 2 * MARGIN, PAGE_SIZE[1] - 2 * MARGIN, id="content")
-    cover_frame = Frame(MARGIN, MARGIN, PAGE_SIZE[0] - 2 * MARGIN, PAGE_SIZE[1] - 2 * MARGIN, id="cover")
-
-    doc.addPageTemplates(
-        [
-            PageTemplate(id="Cover", frames=[cover_frame], onPage=draw_cover_furniture),
-            PageTemplate(id="Content", frames=[content_frame], onPage=draw_content_furniture),
-        ]
-    )
-
-    story = build_story(videos, chapter_files)
-    doc.multiBuild(story)
-
-    print(f"PDF exported -> {OUT_PATH}  ({len(chapter_files)} chapters, font: {FONT})")
+    print(f"PDF exported -> {OUT_PATH}  ({len(chapter_files)} chapters, Typst + {FONT})")
 
 
 if __name__ == "__main__":

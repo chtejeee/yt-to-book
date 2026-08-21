@@ -12,7 +12,7 @@ LLM, then typesets the result.
 | 2 | `2_fetch_transcripts.py` | Downloads a transcript per video (manual captions, falling back to auto-generated) |
 | 3 | `3_build_book.py` | Rewrites each transcript into a structured chapter (intro / body / takeaways) |
 | 4 | `4_export_docx.py` | Combines all chapters into a single `.docx` with cover, TOC, and appendix |
-| 5 | `5_export_pdf.py` | Typesets a print-quality `.pdf` — serif body text, dot-leader TOC, chapter title pages, drop caps, running headers |
+| 5 | `5_export_pdf.py` | Typesets a print-quality `.pdf` via [Typst](https://typst.app) — real hyphenation/kerning, native dot-leader TOC with PDF bookmarks, chapter title pages, genuine wrap-around drop caps, running headers |
 
 Each script reads from / writes to `data/` and can be re-run independently
 (already-processed videos, transcripts, and chapters are skipped).
@@ -24,6 +24,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # then fill in the values below
+
+# Step 5 (PDF) shells out to the Typst CLI for real typesetting
+brew install typst     # macOS; see https://github.com/typst/typst#installation for other platforms
 ```
 
 ### `.env`
