@@ -1,0 +1,8 @@
+yt-dlp
+youtube-transcript-api
+anthropic
+python-docx
+python-dotenv
+flask
+requests
+reportlab
