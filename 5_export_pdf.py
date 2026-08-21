@@ -21,6 +21,7 @@ load_dotenv()
 BASE = Path(__file__).parent
 VIDEOS_PATH = BASE / "data" / "videos.json"
 CHAPTERS_DIR = BASE / "data" / "chapters"
+IMAGES_DIR = BASE / "data" / "images"
 OUT_PATH = BASE / "output" / "book.pdf"
 TYP_PATH = BASE / "output" / "_book.typ"
 
@@ -70,15 +71,45 @@ def parse_chapter(raw: str) -> tuple[str, str]:
     return title, body
 
 
-def body_to_typst(body: str) -> str:
+def load_images(video_id: str) -> tuple[float, list[dict]]:
+    manifest = IMAGES_DIR / video_id / "images.json"
+    if not manifest.exists():
+        return 0.0, []
+    data = json.loads(manifest.read_text())
+    return data.get("duration", 0.0), data.get("images", [])
+
+
+def compute_placements(num_blocks: int, images: list[dict], duration: float) -> dict[int, list[dict]]:
+    """Map each image to a paragraph-block index by matching its proportional position
+    in the video's timeline to the same proportional position in the chapter text."""
+    placements: dict[int, list[dict]] = {}
+    if not images or duration <= 0 or num_blocks == 0:
+        return placements
+    for img in images:
+        proportion = min(max(img["timestamp"] / duration, 0.0), 1.0)
+        idx = min(int(round(proportion * num_blocks)), num_blocks - 1)
+        placements.setdefault(idx, []).append(img)
+    return placements
+
+
+def figure_typst(video_id: str, img: dict) -> str:
+    # TYP_PATH lives in output/, images live in data/images/<id>/ — one level up, then across.
+    rel_path = f"../data/images/{video_id}/{img['file']}"
+    return f'#figure(image("{rel_path}", width: 78%), caption: [{typst_escape(img["caption"])}])'
+
+
+def body_to_typst(body: str, video_id: str = "", placements: dict | None = None) -> str:
     """Render chapter body blocks as Typst markup. The first real paragraph gets a
-    genuine wrap-around drop cap; ##/**bold-line** blocks become level-2 headings."""
+    genuine wrap-around drop cap; ##/**bold-line** blocks become level-2 headings;
+    images are interleaved at their computed placement index."""
+    placements = placements or {}
     out = []
     first_paragraph_done = False
-    for block in body.split("\n\n"):
-        block = block.strip()
-        if not block:
-            continue
+    blocks = [b.strip() for b in body.split("\n\n") if b.strip()]
+
+    for i, block in enumerate(blocks):
+        for img in placements.get(i, []):
+            out.append(figure_typst(video_id, img))
 
         heading_match = re.match(r"^#{2,3}\s+(.*)", block)
         bold_heading_match = re.match(r"^\*\*(.+?)\*\*$", block) if not heading_match else None
@@ -96,6 +127,10 @@ def body_to_typst(body: str) -> str:
             first_paragraph_done = True
         else:
             out.append(converted)
+
+    for img in placements.get(len(blocks), []):
+        out.append(figure_typst(video_id, img))
+
     return "\n\n".join(out)
 
 
@@ -162,8 +197,11 @@ PREAMBLE = f"""\
 """
 
 
-def chapter_block(number: int, title: str, body: str) -> str:
+def chapter_block(number: int, video_id: str, title: str, body: str) -> str:
     kicker = f"CHAPTER {number}"
+    duration, images = load_images(video_id)
+    num_blocks = len([b for b in body.split("\n\n") if b.strip()])
+    placements = compute_placements(num_blocks, images, duration)
     return f"""
 #pagebreak(weak: true)
 #align(center)[
@@ -175,7 +213,7 @@ def chapter_block(number: int, title: str, body: str) -> str:
 #align(center)[#line(length: 14%, stroke: 1.6pt + accent)]
 #v(18pt)
 
-{body_to_typst(body)}
+{body_to_typst(body, video_id, placements)}
 """
 
 
@@ -206,7 +244,7 @@ def build_typst_source(videos: dict, chapter_files: list[Path]) -> str:
         video_id = path.stem
         title, body = parse_chapter(path.read_text(encoding="utf-8"))
         chapters.append((video_id, title, body))
-        parts.append(chapter_block(i, title, body))
+        parts.append(chapter_block(i, video_id, title, body))
 
     parts.append(appendix_block(chapters, videos))
     return "\n".join(parts)
