@@ -17,8 +17,22 @@ ENV_PATH = BASE / ".env"
 VIDEOS_PATH = BASE / "data" / "videos.json"
 TRANSCRIPTS_DIR = BASE / "data" / "transcripts"
 CHAPTERS_DIR = BASE / "data" / "chapters"
-DOCX_PATH = BASE / "output" / "book.docx"
-PDF_PATH = BASE / "output" / "book.pdf"
+SOURCE_PATH = BASE / "data" / "source.json"
+OUTPUT_DIR = BASE / "output"
+
+
+def current_slug() -> str:
+    if SOURCE_PATH.exists():
+        return json.loads(SOURCE_PATH.read_text()).get("slug", "book")
+    return "book"
+
+
+def docx_path() -> Path:
+    return OUTPUT_DIR / f"{current_slug()}.docx"
+
+
+def pdf_path() -> Path:
+    return OUTPUT_DIR / f"{current_slug()}.pdf"
 
 STEPS = [
     ("1_fetch_videos.py", "Fetch Videos"),
@@ -67,10 +81,10 @@ PAGE = """
     <div class="status">DOCX: <span class="{{ 'ok' if docx_exists else 'pending' }}">{{ 'ready' if docx_exists else 'not built' }}</span></div>
     <div class="status">PDF: <span class="{{ 'ok' if pdf_exists else 'pending' }}">{{ 'ready' if pdf_exists else 'not built' }}</span></div>
     {% if docx_exists %}
-      <a class="download" href="{{ url_for('download_docx') }}">Download book.docx</a><br>
+      <a class="download" href="{{ url_for('download_docx') }}">Download {{ docx_name }}</a><br>
     {% endif %}
     {% if pdf_exists %}
-      <a class="download" href="{{ url_for('download_pdf') }}">Download book.pdf</a>
+      <a class="download" href="{{ url_for('download_pdf') }}">Download {{ pdf_name }}</a>
     {% endif %}
   </div>
 
@@ -96,22 +110,31 @@ PAGE = """
 """
 
 
-def count_json(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return len(json.loads(path.read_text()))
+def current_video_ids() -> list[str]:
+    if not VIDEOS_PATH.exists():
+        return []
+    return [v["id"] for v in json.loads(VIDEOS_PATH.read_text())]
 
 
 def render(log_title: str = "", log: str = ""):
     channel_url = get_key(str(ENV_PATH), "YOUTUBE_CHANNEL_URL") or ""
+    docx, pdf = docx_path(), pdf_path()
+    # Scoped to the current book's videos — data/transcripts and data/chapters
+    # accumulate across every book ever built, so counting all files on disk
+    # would show totals from other channels/playlists mixed in.
+    video_ids = current_video_ids()
+    transcript_count = sum(1 for vid in video_ids if (TRANSCRIPTS_DIR / f"{vid}.txt").exists())
+    chapter_count = sum(1 for vid in video_ids if (CHAPTERS_DIR / f"{vid}.txt").exists())
     return render_template_string(
         PAGE,
         channel_url=channel_url,
-        video_count=count_json(VIDEOS_PATH),
-        transcript_count=len(list(TRANSCRIPTS_DIR.glob("*.txt"))) if TRANSCRIPTS_DIR.exists() else 0,
-        chapter_count=len(list(CHAPTERS_DIR.glob("*.txt"))) if CHAPTERS_DIR.exists() else 0,
-        docx_exists=DOCX_PATH.exists(),
-        pdf_exists=PDF_PATH.exists(),
+        video_count=len(video_ids),
+        transcript_count=transcript_count,
+        chapter_count=chapter_count,
+        docx_exists=docx.exists(),
+        pdf_exists=pdf.exists(),
+        docx_name=docx.name,
+        pdf_name=pdf.name,
         steps=STEPS,
         log_title=log_title,
         log=log,
@@ -166,12 +189,12 @@ def run_all():
 
 @app.route("/download/docx")
 def download_docx():
-    return send_file(DOCX_PATH, as_attachment=True)
+    return send_file(docx_path(), as_attachment=True)
 
 
 @app.route("/download/pdf")
 def download_pdf():
-    return send_file(PDF_PATH, as_attachment=True)
+    return send_file(pdf_path(), as_attachment=True)
 
 
 if __name__ == "__main__":

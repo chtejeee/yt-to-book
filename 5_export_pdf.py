@@ -21,14 +21,23 @@ load_dotenv()
 BASE = Path(__file__).parent
 VIDEOS_PATH = BASE / "data" / "videos.json"
 CHAPTERS_DIR = BASE / "data" / "chapters"
-OUT_PATH = BASE / "output" / "book.pdf"
-TYP_PATH = BASE / "output" / "_book.typ"
+SOURCE_PATH = BASE / "data" / "source.json"
+OUTPUT_DIR = BASE / "output"
 
-BOOK_TITLE = os.getenv("BOOK_TITLE", "Parenting with Dr. Debmita Dutta")
-BOOK_SUBTITLE = os.getenv(
-    "BOOK_SUBTITLE", "Insights on Raising Calm, Confident, Successful Children"
-)
-BOOK_BYLINE = os.getenv("BOOK_BYLINE", "Compiled from the YouTube channel of Dr. Debmita Dutta")
+
+def load_source() -> dict:
+    if SOURCE_PATH.exists():
+        return json.loads(SOURCE_PATH.read_text())
+    return {"title": "Book", "slug": "book"}
+
+
+SOURCE = load_source()
+OUT_PATH = OUTPUT_DIR / f"{SOURCE['slug']}.pdf"
+TYP_PATH = OUTPUT_DIR / f"_{SOURCE['slug']}.typ"
+
+BOOK_TITLE = os.getenv("BOOK_TITLE", SOURCE["title"])
+BOOK_SUBTITLE = os.getenv("BOOK_SUBTITLE", "")
+BOOK_BYLINE = os.getenv("BOOK_BYLINE", "Compiled from YouTube")
 
 FONT = os.getenv("PDF_FONT", "Georgia")
 ACCENT = os.getenv("PDF_ACCENT", "#B5533C")
@@ -143,8 +152,7 @@ PREAMBLE = f"""\
     #v(10pt)
     #line(length: 22%, stroke: 2pt + accent)
     #v(16pt)
-    #text(font: body-font, style: "italic", size: 15pt, fill: muted)[{typst_escape(BOOK_SUBTITLE)}]
-    #v(24pt)
+    {f'#text(font: body-font, style: "italic", size: 15pt, fill: muted)[{typst_escape(BOOK_SUBTITLE)}]#v(24pt)' if BOOK_SUBTITLE else ""}
     #text(font: body-font, size: 11pt, fill: rgb("#A8A8A8"))[{typst_escape(BOOK_BYLINE)}]
   ]
 ]
@@ -219,7 +227,9 @@ def main():
         raise SystemExit("typst CLI not found — install it first: brew install typst")
 
     videos = {v["id"]: v for v in json.loads(VIDEOS_PATH.read_text())}
-    chapter_files = sorted(CHAPTERS_DIR.glob("*.txt"))
+    # Scope to the current videos.json only — data/chapters/ accumulates across every
+    # book ever built, so a plain glob would pull in chapters from other channels/playlists.
+    chapter_files = [CHAPTERS_DIR / f"{vid}.txt" for vid in videos if (CHAPTERS_DIR / f"{vid}.txt").exists()]
     if not chapter_files:
         raise SystemExit("No chapters found in data/chapters/ — run 3_build_book.py first")
 

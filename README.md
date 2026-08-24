@@ -9,7 +9,7 @@ LLM, then typesets the result.
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `1_fetch_videos.py` | Lists every video on the channel (id, url, title, description, upload date) via yt-dlp |
-| 2 | `2_fetch_transcripts.py` | Downloads a transcript per video (manual captions, falling back to auto-generated) |
+| 2 | `2_fetch_transcripts.py` | Downloads a transcript per video (manual captions, falling back to auto-generated, then to local Whisper transcription of the audio if YouTube has none or is rate-limiting) |
 | 3 | `3_build_book.py` | Rewrites each transcript into a structured chapter (intro / body / takeaways) |
 | 4 | `4_export_docx.py` | Combines all chapters into a single `.docx` with cover, TOC, and appendix |
 | 5 | `5_export_pdf.py` | Typesets a print-quality `.pdf` via [Typst](https://typst.app) — real hyphenation/kerning, native dot-leader TOC with PDF bookmarks, chapter title pages, genuine wrap-around drop caps, running headers |
@@ -83,16 +83,29 @@ live output, and download the finished `book.docx` / `book.pdf`.
 
 ## Output
 
+Output files are named after the source channel/playlist, not a fixed
+`book.docx`/`book.pdf` — e.g. a channel called "Dr Arif Khan" produces:
+
 ```
 output/
-  book.docx
-  book.pdf
+  dr-arif-khan.docx
+  dr-arif-khan.pdf
 ```
+
+`data/videos.json`, `data/transcripts/`, and `data/chapters/` accumulate
+across every book you build — nothing is deleted when you point
+`YOUTUBE_CHANNEL_URL` at a new channel or playlist. Each export step scopes
+itself to only the videos in the *current* `data/videos.json`, so books
+never mix content from different channels even though the underlying files
+pile up in the same `data/` folder.
 
 ## Notes
 
 - No YouTube API key required — video listing and transcripts both use
   public, unauthenticated endpoints.
-- Videos without any transcript are skipped and logged to `data/skipped.json`.
+- A `watch?v=X&list=Y` URL (the common way to copy a playlist link) is
+  auto-normalized to the full playlist — pasting either form works.
+- Videos with no transcript available at all (after the Whisper fallback
+  also fails) are skipped and logged to `data/skipped.json`.
 - Long transcripts (>8000 tokens with the hosted backend, >3000 with the
   local one) are chunked automatically before being sent to the model.

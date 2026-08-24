@@ -1,16 +1,32 @@
 """Step 4 — Combine chapters into a single DOCX book."""
 import json
+import os
 import re
 from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE = Path(__file__).parent
 VIDEOS_PATH = BASE / "data" / "videos.json"
 CHAPTERS_DIR = BASE / "data" / "chapters"
-OUT_PATH = BASE / "output" / "book.docx"
+SOURCE_PATH = BASE / "data" / "source.json"
+OUTPUT_DIR = BASE / "output"
+
+
+def load_source() -> dict:
+    if SOURCE_PATH.exists():
+        return json.loads(SOURCE_PATH.read_text())
+    return {"title": "Book", "slug": "book"}
+
+
+SOURCE = load_source()
+BOOK_TITLE = os.getenv("BOOK_TITLE", SOURCE["title"])
+OUT_PATH = OUTPUT_DIR / f"{SOURCE['slug']}.docx"
 
 
 def parse_chapter(text: str) -> tuple[str, str]:
@@ -61,7 +77,9 @@ def main():
         raise SystemExit("data/videos.json not found — run 1_fetch_videos.py first")
 
     videos = {v["id"]: v for v in json.loads(VIDEOS_PATH.read_text())}
-    chapter_files = sorted(CHAPTERS_DIR.glob("*.txt"))
+    # Scope to the current videos.json only — data/chapters/ accumulates across every
+    # book ever built, so a plain glob would pull in chapters from other channels/playlists.
+    chapter_files = [CHAPTERS_DIR / f"{vid}.txt" for vid in videos if (CHAPTERS_DIR / f"{vid}.txt").exists()]
 
     if not chapter_files:
         raise SystemExit("No chapters found in data/chapters/ — run 3_build_book.py first")
@@ -77,7 +95,7 @@ def main():
     # Cover page
     title_p = doc.add_paragraph()
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title_p.add_run("The Book")
+    run = title_p.add_run(BOOK_TITLE)
     run.font.size = Pt(36)
     run.bold = True
     doc.add_page_break()

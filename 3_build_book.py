@@ -141,7 +141,9 @@ def main():
     videos = {v["id"]: v for v in json.loads(VIDEOS_PATH.read_text())}
     CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
 
-    transcript_files = sorted(TRANSCRIPTS_DIR.glob("*.txt"))
+    # Scope to the current videos.json only — data/transcripts/ accumulates across every
+    # book ever built, so a plain glob would pull in transcripts from other channels/playlists.
+    transcript_files = [TRANSCRIPTS_DIR / f"{vid}.txt" for vid in videos if (TRANSCRIPTS_DIR / f"{vid}.txt").exists()]
     if not transcript_files:
         raise SystemExit("No transcripts found in data/transcripts/ — run 2_fetch_transcripts.py first")
 
