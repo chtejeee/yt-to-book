@@ -20,6 +20,7 @@ load_dotenv()
 
 BASE = Path(__file__).parent
 VIDEOS_PATH = BASE / "data" / "videos.json"
+SELECTED_PATH = BASE / "data" / "selected.json"
 CHAPTERS_DIR = BASE / "data" / "chapters"
 SOURCE_PATH = BASE / "data" / "source.json"
 OUTPUT_DIR = BASE / "output"
@@ -29,6 +30,14 @@ def load_source() -> dict:
     if SOURCE_PATH.exists():
         return json.loads(SOURCE_PATH.read_text())
     return {"title": "Book", "slug": "book"}
+
+
+def load_selected_ids(all_ids: set[str]) -> set[str]:
+    """Restrict to the videos picked in the UI, if a selection was saved. With no
+    selection.json (e.g. CLI-only use), every fetched video is included."""
+    if not SELECTED_PATH.exists():
+        return all_ids
+    return set(json.loads(SELECTED_PATH.read_text())) & all_ids
 
 
 SOURCE = load_source()
@@ -227,9 +236,10 @@ def main():
         raise SystemExit("typst CLI not found — install it first: brew install typst")
 
     videos = {v["id"]: v for v in json.loads(VIDEOS_PATH.read_text())}
-    # Scope to the current videos.json only — data/chapters/ accumulates across every
+    # Scope to the current selection only — data/chapters/ accumulates across every
     # book ever built, so a plain glob would pull in chapters from other channels/playlists.
-    chapter_files = [CHAPTERS_DIR / f"{vid}.txt" for vid in videos if (CHAPTERS_DIR / f"{vid}.txt").exists()]
+    scope = load_selected_ids(set(videos))
+    chapter_files = [CHAPTERS_DIR / f"{vid}.txt" for vid in scope if (CHAPTERS_DIR / f"{vid}.txt").exists()]
     if not chapter_files:
         raise SystemExit("No chapters found in data/chapters/ — run 3_build_book.py first")
 

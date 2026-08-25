@@ -28,8 +28,18 @@ load_dotenv()
 
 BASE = Path(__file__).parent
 VIDEOS_PATH = BASE / "data" / "videos.json"
+SELECTED_PATH = BASE / "data" / "selected.json"
 TRANSCRIPTS_DIR = BASE / "data" / "transcripts"
 SKIPPED_PATH = BASE / "data" / "skipped.json"
+
+
+def load_selected(videos: list[dict]) -> list[dict]:
+    """Restrict to the videos picked in the UI, if a selection was saved. With no
+    selection.json (e.g. CLI-only use), every fetched video is included."""
+    if not SELECTED_PATH.exists():
+        return videos
+    selected = set(json.loads(SELECTED_PATH.read_text()))
+    return [v for v in videos if v["id"] in selected]
 
 REQUEST_DELAY_SECONDS = 2
 MAX_RETRIES = 2
@@ -99,7 +109,7 @@ def main():
     if not VIDEOS_PATH.exists():
         raise SystemExit("data/videos.json not found — run 1_fetch_videos.py first")
 
-    videos = json.loads(VIDEOS_PATH.read_text())
+    videos = load_selected(json.loads(VIDEOS_PATH.read_text()))
     TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
     api = YouTubeTranscriptApi()

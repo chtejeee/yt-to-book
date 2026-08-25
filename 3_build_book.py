@@ -16,8 +16,17 @@ load_dotenv()
 
 BASE = Path(__file__).parent
 VIDEOS_PATH = BASE / "data" / "videos.json"
+SELECTED_PATH = BASE / "data" / "selected.json"
 TRANSCRIPTS_DIR = BASE / "data" / "transcripts"
 CHAPTERS_DIR = BASE / "data" / "chapters"
+
+
+def load_selected_ids(all_ids: set[str]) -> set[str]:
+    """Restrict to the videos picked in the UI, if a selection was saved. With no
+    selection.json (e.g. CLI-only use), every fetched video is included."""
+    if not SELECTED_PATH.exists():
+        return all_ids
+    return set(json.loads(SELECTED_PATH.read_text())) & all_ids
 
 BACKEND = os.getenv("BACKEND", "anthropic").lower()
 
@@ -141,9 +150,10 @@ def main():
     videos = {v["id"]: v for v in json.loads(VIDEOS_PATH.read_text())}
     CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Scope to the current videos.json only — data/transcripts/ accumulates across every
+    # Scope to the current selection only — data/transcripts/ accumulates across every
     # book ever built, so a plain glob would pull in transcripts from other channels/playlists.
-    transcript_files = [TRANSCRIPTS_DIR / f"{vid}.txt" for vid in videos if (TRANSCRIPTS_DIR / f"{vid}.txt").exists()]
+    scope = load_selected_ids(set(videos))
+    transcript_files = [TRANSCRIPTS_DIR / f"{vid}.txt" for vid in scope if (TRANSCRIPTS_DIR / f"{vid}.txt").exists()]
     if not transcript_files:
         raise SystemExit("No transcripts found in data/transcripts/ — run 2_fetch_transcripts.py first")
 

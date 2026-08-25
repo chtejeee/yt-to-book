@@ -2,6 +2,7 @@
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -13,6 +14,7 @@ load_dotenv()
 CHANNEL_URL = os.getenv("YOUTUBE_CHANNEL_URL")
 OUT_PATH = Path(__file__).parent / "data" / "videos.json"
 SOURCE_PATH = Path(__file__).parent / "data" / "source.json"
+HISTORY_PATH = Path(__file__).parent / "data" / "history.json"
 
 
 def normalize_url(url: str) -> str:
@@ -78,17 +80,37 @@ def fetch_videos(channel_url: str) -> tuple[str, list[dict]]:
     return source_title, results
 
 
+def record_history(slug: str, title: str, url: str, video_count: int):
+    """Upsert a book entry (by slug) into data/history.json — a running log of
+    every channel/playlist ever fetched, shown on the UI's History page."""
+    history = json.loads(HISTORY_PATH.read_text()) if HISTORY_PATH.exists() else []
+    history = [h for h in history if h.get("slug") != slug]
+    history.append(
+        {
+            "slug": slug,
+            "title": title,
+            "url": url,
+            "video_count": video_count,
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    )
+    history.sort(key=lambda h: h["fetched_at"], reverse=True)
+    HISTORY_PATH.write_text(json.dumps(history, indent=2, ensure_ascii=False))
+
+
 def main():
     if not CHANNEL_URL:
         raise SystemExit("YOUTUBE_CHANNEL_URL not set in .env")
 
     source_title, videos = fetch_videos(CHANNEL_URL)
+    slug = slugify(source_title)
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(videos, indent=2, ensure_ascii=False))
     SOURCE_PATH.write_text(
-        json.dumps({"title": source_title, "slug": slugify(source_title)}, indent=2, ensure_ascii=False)
+        json.dumps({"title": source_title, "slug": slug, "url": CHANNEL_URL}, indent=2, ensure_ascii=False)
     )
+    record_history(slug, source_title, CHANNEL_URL, len(videos))
 
     print(f"Fetched {len(videos)} videos from '{source_title}' -> {OUT_PATH}")
 
